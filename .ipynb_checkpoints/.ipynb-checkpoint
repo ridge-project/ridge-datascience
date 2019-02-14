@@ -1,0 +1,888 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 39,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import os\n",
+    "import cv2\n",
+    "import tensorflow as tf\n",
+    "import matplotlib.pyplot as plt\n",
+    "import matplotlib.image as mpimg\n",
+    "from numpy import genfromtxt\n",
+    "from keras import backend as K\n",
+    "K.set_image_data_format('channels_first')\n",
+    "from keras.models import Model,Sequential\n",
+    "from keras.layers import Conv2D, ZeroPadding2D, Activation, Input, concatenate\n",
+    "from keras.layers.normalization import BatchNormalization\n",
+    "from keras.layers.pooling import MaxPooling2D, AveragePooling2D\n",
+    "from keras.layers.core import Lambda, Flatten, Dense\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def triplet_loss(y_true, y_pred, alpha = 0.2):\n",
+    "    \"\"\"\n",
+    "    Implementation of the triplet loss as defined by formula (3)\n",
+    "    \n",
+    "    Arguments:\n",
+    "    y_true -- true labels, required when you define a loss in Keras, you don't need it in this function.\n",
+    "    y_pred -- python list containing three objects:\n",
+    "            anchor -- the encodings for the anchor images, of shape (None, 128)\n",
+    "            positive -- the encodings for the positive images, of shape (None, 128)\n",
+    "            negative -- the encodings for the negative images, of shape (None, 128)\n",
+    "    \n",
+    "    Returns:\n",
+    "    loss -- real number, value of the loss\n",
+    "    \"\"\"\n",
+    "    print(\"Inside triplet loss\")\n",
+    "    \n",
+    "    anchor, positive, negative = y_pred[0], y_pred[1], y_pred[2]\n",
+    "    print(anchor)\n",
+    "    print(positive)\n",
+    "    print(negative)\n",
+    "    ### START CODE HERE ### (˜ 4 lines)\n",
+    "    # Step 1: Compute the (encoding) distance between the anchor and the positive, you will need to sum over axis=-1\n",
+    "    pos_dist = tf.reduce_sum(tf.square(tf.subtract(anchor,positive)),axis=-1)\n",
+    "    # Step 2: Compute the (encoding) distance between the anchor and the negative, you will need to sum over axis=-1\n",
+    "    neg_dist = tf.reduce_sum(tf.square(tf.subtract(anchor,negative)),axis=-1)\n",
+    "    # Step 3: subtract the two previous distances and add alpha.\n",
+    "    basic_loss = tf.add(tf.subtract(pos_dist,neg_dist),alpha)\n",
+    "    # Step 4: Take the maximum of basic_loss and 0.0. Sum over the training examples.\n",
+    "    loss = tf.reduce_sum(tf.maximum(basic_loss, 0.0))\n",
+    "    ### END CODE HERE ###\n",
+    "    \n",
+    "    print(\"Entering the function\")\n",
+    "    return loss\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 25,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def faceRecoModel(input_shape):\n",
+    "    \"\"\"\n",
+    "    Implementation of the Inception model used for FaceNet\n",
+    "    \n",
+    "    Arguments:\n",
+    "    input_shape -- shape of the images of the dataset\n",
+    "    Returns:\n",
+    "    model -- a Model() instance in Keras\n",
+    "    \"\"\"\n",
+    "        \n",
+    "    # Define the input as a tensor with shape input_shape\n",
+    "    X_input = Input(input_shape)\n",
+    "\n",
+    "    # Zero-Padding\n",
+    "    X = ZeroPadding2D((3, 3))(X_input)\n",
+    "    \n",
+    "    # First Block\n",
+    "    X = Conv2D(64, (7, 7), strides = (2, 2), name = 'conv1')(X)\n",
+    "    X = BatchNormalization(axis = 1, name = 'bn1')(X)\n",
+    "    X = Activation('relu')(X)\n",
+    "    \n",
+    "    # Zero-Padding + MAXPOOL\n",
+    "    X = ZeroPadding2D((1, 1))(X)\n",
+    "    X = MaxPooling2D((3, 3), strides = 2)(X)\n",
+    "    \n",
+    "    # Second Block\n",
+    "    X = Conv2D(64, (1, 1), strides = (1, 1), name = 'conv2')(X)\n",
+    "    X = BatchNormalization(axis = 1, epsilon=0.00001, name = 'bn2')(X)\n",
+    "    X = Activation('relu')(X)\n",
+    "    \n",
+    "    # Zero-Padding + MAXPOOL\n",
+    "    X = ZeroPadding2D((1, 1))(X)\n",
+    "\n",
+    "    # Second Block\n",
+    "    X = Conv2D(192, (3, 3), strides = (1, 1), name = 'conv3')(X)\n",
+    "    X = BatchNormalization(axis = 1, epsilon=0.00001, name = 'bn3')(X)\n",
+    "    X = Activation('relu')(X)\n",
+    "    \n",
+    "    # Zero-Padding + MAXPOOL\n",
+    "    X = ZeroPadding2D((1, 1))(X)\n",
+    "    \n",
+    "    X = MaxPooling2D(pool_size = 3, strides = 2)(X)\n",
+    "    \n",
+    "    X = AveragePooling2D(pool_size=(3, 3), strides=(1, 1), data_format='channels_first')(X)\n",
+    "    X = Flatten()(X)\n",
+    "    X = Dense(128, name='dense_layer')(X)\n",
+    "    \n",
+    "    # L2 normalization\n",
+    "    X = Lambda(lambda  x: K.l2_normalize(x,axis=1))(X)\n",
+    "    \n",
+    "             \n",
+    "    # Create model instance\n",
+    "    model = Model(inputs = X_input, outputs = X, name='FaceRecoModel')\n",
+    "        \n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "_FLOATX = 'float32'\n",
+    "def variable(value, dtype=_FLOATX, name=None):\n",
+    "    v = tf.Variable(np.asarray(value, dtype=dtype), name=name)\n",
+    "    _get_session().run(v.initializer)\n",
+    "    return v\n",
+    "\n",
+    "def shape(x):\n",
+    "    return x.get_shape()\n",
+    "\n",
+    "def square(x):\n",
+    "    return tf.square(x)\n",
+    "\n",
+    "def zeros(shape, dtype=_FLOATX, name=None):\n",
+    "    return variable(np.zeros(shape), dtype, name)\n",
+    "\n",
+    "def concatenate(tensors, axis=-1):\n",
+    "    if axis < 0:\n",
+    "        axis = axis % len(tensors[0].get_shape())\n",
+    "    return tf.concat(axis, tensors)\n",
+    "\n",
+    "def LRN2D(x):\n",
+    "    return tf.nn.lrn(x, alpha=1e-4, beta=0.75)\n",
+    "\n",
+    "def conv2d_bn(x,\n",
+    "              layer=None,\n",
+    "              cv1_out=None,\n",
+    "              cv1_filter=(1, 1),\n",
+    "              cv1_strides=(1, 1),\n",
+    "              cv2_out=None,\n",
+    "              cv2_filter=(3, 3),\n",
+    "              cv2_strides=(1, 1),\n",
+    "              padding=None):\n",
+    "    num = '' if cv2_out == None else '1'\n",
+    "    tensor = Conv2D(cv1_out, cv1_filter, strides=cv1_strides, data_format='channels_first', name=layer+'_conv'+num)(x)\n",
+    "    tensor = BatchNormalization(axis=1, epsilon=0.00001, name=layer+'_bn'+num)(tensor)\n",
+    "    tensor = Activation('relu')(tensor)\n",
+    "    if padding == None:\n",
+    "        return tensor\n",
+    "    tensor = ZeroPadding2D(padding=padding, data_format='channels_first')(tensor)\n",
+    "    if cv2_out == None:\n",
+    "        return tensor\n",
+    "    tensor = Conv2D(cv2_out, cv2_filter, strides=cv2_strides, data_format='channels_first', name=layer+'_conv'+'2')(tensor)\n",
+    "    tensor = BatchNormalization(axis=1, epsilon=0.00001, name=layer+'_bn'+'2')(tensor)\n",
+    "    tensor = Activation('relu')(tensor)\n",
+    "    return tensor\n",
+    "\n",
+    "WEIGHTS_mod = [\n",
+    "  'conv1', 'bn1', 'conv2', 'bn2', 'conv3', 'bn3'\n",
+    "]\n",
+    "conv_shape = {\n",
+    "  'conv1': [64, 3, 7, 7],\n",
+    "  'conv2': [64, 64, 1, 1],\n",
+    "  'conv3': [192, 64, 3, 3]\n",
+    "}\n",
+    "\n",
+    "def load_weights_from_FaceNet(FRmodel):\n",
+    "    # Load weights from csv files (which was exported from Openface torch model)\n",
+    "    weights = WEIGHTS_mod\n",
+    "    weights_dict = load_weights()\n",
+    "\n",
+    "    # Set layer weights of the model\n",
+    "    for name in weights:\n",
+    "        if FRmodel.get_layer(name) != None:\n",
+    "            FRmodel.get_layer(name).set_weights(weights_dict[name])\n",
+    "        elif model.get_layer(name) != None:\n",
+    "            model.get_layer(name).set_weights(weights_dict[name])\n",
+    "\n",
+    "def load_weights():\n",
+    "    # Set weights path\n",
+    "    dirPath = './weights'\n",
+    "    fileNames = filter(lambda f: not f.startswith('.'), os.listdir(dirPath))\n",
+    "    paths = {}\n",
+    "    weights_dict = {}\n",
+    "\n",
+    "    for n in fileNames:\n",
+    "        paths[n.replace('.csv', '')] = dirPath + '/' + n\n",
+    "\n",
+    "    for name in WEIGHTS_mod:\n",
+    "        if 'conv' in name:\n",
+    "            conv_w = genfromtxt(paths[name + '_w'], delimiter=',', dtype=None)\n",
+    "            conv_w = np.reshape(conv_w, conv_shape[name])\n",
+    "            conv_w = np.transpose(conv_w, (2, 3, 1, 0))\n",
+    "            conv_b = genfromtxt(paths[name + '_b'], delimiter=',', dtype=None)\n",
+    "            weights_dict[name] = [conv_w, conv_b]     \n",
+    "        elif 'bn' in name:\n",
+    "            bn_w = genfromtxt(paths[name + '_w'], delimiter=',', dtype=None)\n",
+    "            bn_b = genfromtxt(paths[name + '_b'], delimiter=',', dtype=None)\n",
+    "            bn_m = genfromtxt(paths[name + '_m'], delimiter=',', dtype=None)\n",
+    "            bn_v = genfromtxt(paths[name + '_v'], delimiter=',', dtype=None)\n",
+    "            weights_dict[name] = [bn_w, bn_b, bn_m, bn_v]\n",
+    "        elif 'dense' in name:\n",
+    "            dense_w = genfromtxt(dirPath+'/dense_w.csv', delimiter=',', dtype=None)\n",
+    "            dense_w = np.reshape(dense_w, (128, 736))\n",
+    "            dense_w = np.transpose(dense_w, (1, 0))\n",
+    "            dense_b = genfromtxt(dirPath+'/dense_b.csv', delimiter=',', dtype=None)\n",
+    "            weights_dict[name] = [dense_w, dense_b]\n",
+    "\n",
+    "    return weights_dict\n",
+    "\n",
+    "def img_to_encoding(image_path, model):\n",
+    "    img1 = cv2.imread(image_path, 1)\n",
+    "    img = img1[...,::-1]\n",
+    "    img = np.around(np.transpose(img, (2,0,1))/255.0, decimals=12)\n",
+    "    x_train = np.array([img])\n",
+    "    embedding = model.predict_on_batch(x_train)\n",
+    "    flat_input=embedding.flatten()\n",
+    "    return embedding\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 27,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Inside triplet loss\n",
+      "Tensor(\"loss_2/lambda_3_loss/strided_slice:0\", shape=(128,), dtype=float32)\n",
+      "Tensor(\"loss_2/lambda_3_loss/strided_slice_1:0\", shape=(128,), dtype=float32)\n",
+      "Tensor(\"loss_2/lambda_3_loss/strided_slice_2:0\", shape=(128,), dtype=float32)\n",
+      "Entering the function\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "FRmodel = faceRecoModel(input_shape=(3, 350, 350))\n",
+    "FRmodel.compile(optimizer = 'adam', loss = triplet_loss, metrics = ['accuracy'])\n",
+    "load_weights_from_FaceNet(FRmodel)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 28,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    " def show_images(image_path_original,image_path_check):\n",
+    "    \n",
+    "    imageA=mpimg.imread(image_path_original)\n",
+    "    imageB=mpimg.imread(image_path_check)\n",
+    "    fig = plt.figure(\"Comparison\")\n",
+    " \n",
+    "    # show first image\n",
+    "    ax = fig.add_subplot(1, 2, 1)\n",
+    "    plt.imshow(imageA, cmap = plt.cm.gray)\n",
+    "    plt.axis(\"off\")\n",
+    " \n",
+    "    # show the second image\n",
+    "    ax = fig.add_subplot(1, 2, 2)\n",
+    "    plt.imshow(imageB, cmap = plt.cm.gray)\n",
+    "    plt.axis(\"off\")\n",
+    " \n",
+    "    # show the images\n",
+    "    plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 73,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def verify(image_path_original, image_path_check, model): \n",
+    "    \n",
+    "    encoding_original = img_to_encoding(image_path_original,model)\n",
+    "    encoding_check = img_to_encoding(image_path_check,model)\n",
+    "    \n",
+    "    dist = np.linalg.norm(encoding_original-encoding_check)\n",
+    "    dist = dist/256\n",
+    "    # setup the figure\n",
+    "    \n",
+    "    show_images(image_path_original,image_path_check)\n",
+    "    print (\"Distance is \" , dist)\n",
+    "    if dist < 1:\n",
+    "        print(\"It's similar\")          \n",
+    "    else:\n",
+    "        print(\"It's not similar\")\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 74,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "def verify_ml_approach(image_path_original,image_path_check):\n",
+    "    verify(image_path_original, image_path_check, FRmodel)\n",
+    "    \n",
+    "  "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 75,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 2 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Distance is  0.002660641446709633\n",
+      "It's similar\n"
+     ]
+    }
+   ],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\", \"images/image3.png\")\n",
+    "#verify_ml_approach(\"images/Original.png\", \"images/Negative.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "scrolled": false
+   },
+   "outputs": [],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\", \"images/image1_modified.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 72,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "image/png": "iVBORw0KGgoAAAANSUhEUgAAAXcAAAC7CAYAAACend6FAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEgAACxIB0t1+/AAAADl0RVh0U29mdHdhcmUAbWF0cGxvdGxpYiB2ZXJzaW9uIDMuMC4yLCBodHRwOi8vbWF0cGxvdGxpYi5vcmcvOIA7rQAACeBJREFUeJzt3duLVfX7wPFnn0wwIzUt0ymC0ospqcgoSEYYk8K6iXIoYjAIuujf8TIIO0LhTXSl0UVlFETFQBd10QmjHA9TCcXMPqzvxe8nfGXGb67t2qen1+tyNeuzP+rDuz1r7712rSiKACCX+qg3AED1xB0gIXEHSEjcARISd4CExB0gIXEHSEjcARISd4CExB0goeaoN/D/3AOBQauN6HHNNoO25mx75g6QkLgDJCTuAAmJO0BC4g6QkLgDJCTuAAmJO0BC4g6QkLgDJCTuAAmJO0BC4g6QkLgDJCTuAAmJO0BC4/JlHWPn6NGjsXXr1lFvY+KcO3cuXn755VFvg//BbPdn0mZb3K/gnnvuiT179ox6GxNnYWFh1FvgH5jt/kzabLssA5CQuAMkJO4ACYk7QEJeUO1Dr9cb9RZGrtFoRFEUo94GFTPbeWZb3Ev67bff4pZbbol2uz3qrYxMrVaL33//PTZv3jzqrVAhs51rtsW9pFqtFq1Wa9TbGKlarRa1Wm3U26BiZjvXbLvmDpCQuAMkJO4ACYk7QEJeUK3Y33//HZ999lnp82ZnZ1e9De3DDz8s/eLOvn37otm8/J+1Xq/HyZMno16/+v+X93q9OHDgQIq3hFGNTZs2jXoLlVtaWhr1FgZG3Ct29uzZePTRR0ud88knn0Sj0VgV9xtvvDEefPDBUmstLi6uehtXvV6P++67L7Zt23bV63S73eh0OtFoNEo9PjAexH0AOp1OqZ+/0gdHLgW2Cp1Op9Ra3W63kscFRsM1d4CExB0gIXEHSEjcARISd4CExB0gIXEHSEjcARISd4CEfEK1Yq1WK06cOFHqnF9++SVmZmZWHV9YWCh974uHHnpozeOnTp2KDRs2XPU6nU4nHn/88VKPDYwPca/Y9u3bY2pqqvR5a3212UsvvVR6nbVuMdDpdOKZZ56pZC1gMoj7AFR5P5iqCDX8u7jmDpCQuAMkJO4ACbnmXrEzZ87EF198Ueqcs2fPxosvvrjquvirr75a6gs2IiJmZmbi+uuvv+xYs9mMt956q9S7ZXq9Xhw6dKjUtzcB40PcK7a8vByHDh0qdc6nn3665tfp3X333bF3795Sa124cGHN4/v37y/9TUy+Yg8ml6dlAAmJO0BC4g6QkLgDJCTuAAmJO0BC4g6QkLgDJCTuAAn5hOoAlP3I/lqfTr10vKqP/9fr9VJrFUURvV6vkscGhk/cK7Zp06Z45513Sp3TbrfjkUceWXX8u+++ix9//LHUWk888cSax0+ePBmtVuuq1+l2uzE3N1fqsYHxIe4V27hxYzz99NOlz+t2u6uOPffcc1VsKTqdTjz77LOVrAVMBtfcARISd4CExB0gIdfcK1ar1Uq9cHnpnOXl5VXH+3mnzJXe4XLdddeVuj/7lfYETAZxr9jPP/9cOooLCwsxNzcX7Xb7suNHjx6Nm2++udRaBw8ejI0bN152rNVqxUcffRRbtmy56nW63W7cddddvokJJpS4V6woirjzzjtLnbO4uLjm8b1791byTUxFUcQdd9zhm5jgX8TTMoCExB0gIXEHSEjcARISd4CExB0gIXEHSEjcARISd4CEfEJ1AMreW6bRaKx5vF6vX/G/ldVsNkvtq16vr7odAjA5xL1iO3bsiB9++KHUOVNTU9HpdFYd/+mnn+L06dOl1nrsscdWHet2u/HXX3+V2ldRFDE1NVXqsYHxIe4VazQasXPnztLnrXUfl6eeeqqKLUVRFH3tCZhcrrkDJOSZO3BVlpaWRr0FSvDMHSAhcQdISNwBEhJ3gITEHSAhcQdISNwBEhJ3gITEHSAhcQdISNwBEhJ3gITEHSAhcQdIyC1/+7Bu3bqo1Wqj3sbI/Jv/7NmZ7Tx/dnEvacuWLfHll1+Oehsjt2vXrlFvgYqZ7f+TZbbFvaRmsxm7d+8e9TagcmY7F9fcARISd4CEXJaZII1GI+r1evR6vWg0GlEURXS73ej1eqPeGlwTs109cZ8AzWYz3nzzzVi/fn1MT0/Hhg0bYmVlJZaXl+Obb76JXbt2xb333hvtdnvUW4VSzPbgiPsYO3XqVNx0000xPT0dc3Nza/7Mf7+y//HHH8fs7GysrKwMa4vQF7M9eK65j6nFxcXYv39/7N69Ozqdzj/+fLvdjn379sXx48djeXl5CDuE/pjt4RD3MXThwoXodrt9/Sr65JNPxrfffjuAXcG1M9vDI+5jptFoxK+//hrbt2/ve409e/bEiRMnotVqVbgzuDZme7jEfYy0Wq34+uuvY3p6+prXOnjwYLz99tsV7AqundkePnEfIx988EHcf//9la13+PDhaDQala0H/TLbwyfuY+TcuXOVv+WrKIpK14N+mO3hE/cx8sADD1S6Xq/Xi88//7zSNaEfZnv4xH2MbN68ufI1z58/X/maUJbZHj5xHyOD+IDGunXrKl8TyjLbwyfuY2QQz0S2bt1a+ZpQltkePnEfIwsLC5V+E0yj0aj0HQrQL7M9fOI+Rh5++OGo16v7J1laWnLDJcaC2R4+cR8jt99+e7z77ruVrFWv1+O9996rZC24VmZ7+MR9jHQ6nTh8+HC88cYb1/Qsp9lsxmuvvRbz8/MV7g76Z7aHT9zHTKfTiRdeeCGOHz/e1/mtVitef/31OHLkiC86YKyY7eES9zHUbrdjbm4uTp8+XepFqEajEa+88krMz89f1a1UYdjM9vCI+5haWVmJHTt2xLFjx/7xPcLNZjP+/PPPOHbsWBw5csQLTYw1sz0cvolpjNVqtZifn49arRZnzpyJhYWFOH/+fBRFEUVRRL1ej507d8bMzEzccMMN8fzzz7vfBhPBbA+euE+Aoihi27ZtceDAgct+lb007H5NZVKZ7cER9wnj2QtZme1queYOkJC4AyTksswVXLx4Mf7444+hP26VH9G+ZJjvCb548eLQHov+mO3+TNps18bkOtdYbGLUlpeX4/3336/0Bkv1ej1uu+02N1mKqO4vtRyzHWZ7wNb8S/XMfYysrKzE7OxspS8stVqt+OqrrypbD/phtofPNXeAhMQdICFxB0hI3AESEneAhMQdICFxB0jI+9zHTLPZrPS9wFWvB/0y28PlE6pjpCiK+P777yv9FF9ExK233hrr16+vdM0J5BOqI2S2B2rNv1Rx599C3Mlqzdl2zR0gIXEHSEjcARISd4CExB0gIXEHSEjcARISd4CExB0gIXEHSEjcARISd4CExB0goXG5n/uo7tgHg2a2GQnP3AESEneAhMQdICFxB0hI3AESEneAhMQdICFxB0hI3AESEneAhMQdICFxB0hI3AESEneAhMQdICFxB0hI3AESEneAhMQdICFxB0hI3AESEneAhMQdIKH/AHbOO8/G7bR9AAAAAElFTkSuQmCC\n",
+      "text/plain": [
+       "<Figure size 432x288 with 2 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Distance is  0.0014132484793663025\n",
+      "It's similar\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "0.0014132484793663025"
+      ]
+     },
+     "execution_count": 72,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\", \"images/image1_modified1.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\", \"images/image1_modified2.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\", \"images/image1_modified3.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\",\"images/image9.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "verify_ml_approach(\"images/image1.png\",\"images/image6.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [],
+   "source": [
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 32,
+   "metadata": {
+    "scrolled": false
+   },
+   "outputs": [],
+   "source": [
+    "def load_train_data():\n",
+    "    dataset = np.genfromtxt(\"data.csv\", dtype=\"U\" ,delimiter=\",\" )\n",
+    "    X = dataset[:,0:2]\n",
+    "    Y = dataset[:,2]\n",
+    "    Y= [int(i) for i in Y]\n",
+    "    m=len(Y)\n",
+    "    return X,Y,m\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 33,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def getimagePath(name):\n",
+    "    return('images/'+str(name)+'.png')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 34,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def getSimpleModel():\n",
+    "    inputs=Input(shape=(128,))\n",
+    "    # a layer instance is callable on a tensor, and returns a tensor\n",
+    "    x = Dense(64, activation='relu')(inputs)\n",
+    "    x = Dense(64, activation='relu')(x)\n",
+    "    predictions = Dense(11, activation='softmax')(x)\n",
+    "\n",
+    "    # This creates a model that includes\n",
+    "    # the Input layer and three Dense layers\n",
+    "    model = Model(inputs=inputs, outputs=predictions)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 35,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def getSeqModel():\n",
+    "    model = Sequential()\n",
+    "    model.add(Dense(64, activation='relu'))\n",
+    "    model.add(Dense(11, activation='softmax'))\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 41,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def prepare_train_data(X,Y,m,classes=11):\n",
+    "    dat=np.zeros((1,128))\n",
+    "    data=np.zeros((m,128))\n",
+    "    labels=np.zeros((m,classes))\n",
+    "    row=0\n",
+    "    for [ori,chk] in X:\n",
+    "        ori_encoding=img_to_encoding(getimagePath(ori), FRmodel)\n",
+    "        chk_encoding=img_to_encoding(getimagePath(chk), FRmodel)\n",
+    "        dat=(ori_encoding-chk_encoding)\n",
+    "        data[row,:]=dat\n",
+    "        labels[row,Y[row]]=1\n",
+    "        row=row+1  \n",
+    "    return data,labels"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 89,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch 1/100\n",
+      "22/22 [==============================] - 4s 185ms/step - loss: 2.3554 - acc: 0.5000\n",
+      "Epoch 2/100\n",
+      "22/22 [==============================] - 0s 635us/step - loss: 2.2922 - acc: 0.6364\n",
+      "Epoch 3/100\n",
+      "22/22 [==============================] - 0s 1ms/step - loss: 2.2378 - acc: 0.6364\n",
+      "Epoch 4/100\n",
+      "22/22 [==============================] - 0s 907us/step - loss: 2.1868 - acc: 0.6364\n",
+      "Epoch 5/100\n",
+      "22/22 [==============================] - 0s 680us/step - loss: 2.1370 - acc: 0.6364\n",
+      "Epoch 6/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 2.0870 - acc: 0.6364\n",
+      "Epoch 7/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 2.0349 - acc: 0.6364\n",
+      "Epoch 8/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 1.9839 - acc: 0.6364\n",
+      "Epoch 9/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 1.9326 - acc: 0.6364\n",
+      "Epoch 10/100\n",
+      "22/22 [==============================] - 0s 1ms/step - loss: 1.8811 - acc: 0.6364\n",
+      "Epoch 11/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.8295 - acc: 0.6364\n",
+      "Epoch 12/100\n",
+      "22/22 [==============================] - 0s 998us/step - loss: 1.7785 - acc: 0.6364\n",
+      "Epoch 13/100\n",
+      "22/22 [==============================] - 0s 454us/step - loss: 1.7277 - acc: 0.6364\n",
+      "Epoch 14/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 1.6774 - acc: 0.6364\n",
+      "Epoch 15/100\n",
+      "22/22 [==============================] - 0s 589us/step - loss: 1.6288 - acc: 0.6364\n",
+      "Epoch 16/100\n",
+      "22/22 [==============================] - 0s 363us/step - loss: 1.5821 - acc: 0.6364\n",
+      "Epoch 17/100\n",
+      "22/22 [==============================] - 0s 544us/step - loss: 1.5369 - acc: 0.6364\n",
+      "Epoch 18/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.4938 - acc: 0.6364\n",
+      "Epoch 19/100\n",
+      "22/22 [==============================] - 0s 453us/step - loss: 1.4527 - acc: 0.6364\n",
+      "Epoch 20/100\n",
+      "22/22 [==============================] - 0s 2ms/step - loss: 1.4142 - acc: 0.6364\n",
+      "Epoch 21/100\n",
+      "22/22 [==============================] - 0s 499us/step - loss: 1.3780 - acc: 0.6364\n",
+      "Epoch 22/100\n",
+      "22/22 [==============================] - 0s 681us/step - loss: 1.3443 - acc: 0.6364\n",
+      "Epoch 23/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 1.3130 - acc: 0.6364\n",
+      "Epoch 24/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 1.2839 - acc: 0.6364\n",
+      "Epoch 25/100\n",
+      "22/22 [==============================] - 0s 408us/step - loss: 1.2572 - acc: 0.6364\n",
+      "Epoch 26/100\n",
+      "22/22 [==============================] - 0s 2ms/step - loss: 1.2330 - acc: 0.6364\n",
+      "Epoch 27/100\n",
+      "22/22 [==============================] - 0s 408us/step - loss: 1.2109 - acc: 0.6364\n",
+      "Epoch 28/100\n",
+      "22/22 [==============================] - 0s 135us/step - loss: 1.1905 - acc: 0.6364\n",
+      "Epoch 29/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 1.1722 - acc: 0.6364\n",
+      "Epoch 30/100\n",
+      "22/22 [==============================] - 0s 1ms/step - loss: 1.1551 - acc: 0.6364\n",
+      "Epoch 31/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.1393 - acc: 0.6364\n",
+      "Epoch 32/100\n",
+      "22/22 [==============================] - 0s 907us/step - loss: 1.1246 - acc: 0.6364\n",
+      "Epoch 33/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.1108 - acc: 0.6364\n",
+      "Epoch 34/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.0978 - acc: 0.6364\n",
+      "Epoch 35/100\n",
+      "22/22 [==============================] - 0s 499us/step - loss: 1.0853 - acc: 0.6364\n",
+      "Epoch 36/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 1.0733 - acc: 0.6364\n",
+      "Epoch 37/100\n",
+      "22/22 [==============================] - 0s 1ms/step - loss: 1.0615 - acc: 0.6364\n",
+      "Epoch 38/100\n",
+      "22/22 [==============================] - 0s 5ms/step - loss: 1.0502 - acc: 0.6364\n",
+      "Epoch 39/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 1.0390 - acc: 0.6364\n",
+      "Epoch 40/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 1.0280 - acc: 0.6364\n",
+      "Epoch 41/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 1.0175 - acc: 0.6364\n",
+      "Epoch 42/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 1.0072 - acc: 0.6364\n",
+      "Epoch 43/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 0.9966 - acc: 0.6364\n",
+      "Epoch 44/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 0.9863 - acc: 0.6364\n",
+      "Epoch 45/100\n",
+      "22/22 [==============================] - 0s 91us/step - loss: 0.9761 - acc: 0.6364\n",
+      "Epoch 46/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.9659 - acc: 0.6364\n",
+      "Epoch 47/100\n",
+      "22/22 [==============================] - 0s 544us/step - loss: 0.9557 - acc: 0.6364\n",
+      "Epoch 48/100\n",
+      "22/22 [==============================] - 0s 816us/step - loss: 0.9455 - acc: 0.6364\n",
+      "Epoch 49/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 0.9355 - acc: 0.6364\n",
+      "Epoch 50/100\n",
+      "22/22 [==============================] - 0s 5ms/step - loss: 0.9254 - acc: 0.6364\n",
+      "Epoch 51/100\n",
+      "22/22 [==============================] - 0s 363us/step - loss: 0.9153 - acc: 0.6364\n",
+      "Epoch 52/100\n",
+      "22/22 [==============================] - 0s 680us/step - loss: 0.9052 - acc: 0.6364\n",
+      "Epoch 53/100\n",
+      "22/22 [==============================] - 0s 408us/step - loss: 0.8952 - acc: 0.6364\n",
+      "Epoch 54/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 0.8852 - acc: 0.6364\n",
+      "Epoch 55/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 0.8751 - acc: 0.6818\n",
+      "Epoch 56/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 0.8650 - acc: 0.6818\n",
+      "Epoch 57/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 0.8550 - acc: 0.6818\n",
+      "Epoch 58/100\n",
+      "22/22 [==============================] - 0s 952us/step - loss: 0.8450 - acc: 0.6818\n",
+      "Epoch 59/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 0.8350 - acc: 0.6818\n",
+      "Epoch 60/100\n",
+      "22/22 [==============================] - 0s 272us/step - loss: 0.8248 - acc: 0.6818\n",
+      "Epoch 61/100\n",
+      "22/22 [==============================] - 0s 5ms/step - loss: 0.8148 - acc: 0.6818\n",
+      "Epoch 62/100\n",
+      "22/22 [==============================] - 0s 408us/step - loss: 0.8046 - acc: 0.6818\n",
+      "Epoch 63/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 0.7945 - acc: 0.6818\n",
+      "Epoch 64/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.7847 - acc: 0.6818\n",
+      "Epoch 65/100\n",
+      "22/22 [==============================] - 0s 317us/step - loss: 0.7747 - acc: 0.6818\n",
+      "Epoch 66/100\n",
+      "22/22 [==============================] - 0s 589us/step - loss: 0.7648 - acc: 0.6818\n",
+      "Epoch 67/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.7549 - acc: 0.6818\n",
+      "Epoch 68/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.7451 - acc: 0.6818\n",
+      "Epoch 69/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 0.7351 - acc: 0.6818\n",
+      "Epoch 70/100\n",
+      "22/22 [==============================] - 0s 907us/step - loss: 0.7251 - acc: 0.7273\n",
+      "Epoch 71/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.7152 - acc: 0.7273\n",
+      "Epoch 72/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.7054 - acc: 0.7273\n",
+      "Epoch 73/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.6958 - acc: 0.7273\n",
+      "Epoch 74/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.6861 - acc: 0.7273\n",
+      "Epoch 75/100\n",
+      "22/22 [==============================] - 0s 91us/step - loss: 0.6763 - acc: 0.7273\n",
+      "Epoch 76/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.6667 - acc: 0.7273\n",
+      "Epoch 77/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.6568 - acc: 0.7273\n",
+      "Epoch 78/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.6474 - acc: 0.7273\n",
+      "Epoch 79/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.6378 - acc: 0.7273\n",
+      "Epoch 80/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.6281 - acc: 0.7273\n",
+      "Epoch 81/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.6185 - acc: 0.7273\n",
+      "Epoch 82/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.6090 - acc: 0.7727\n",
+      "Epoch 83/100\n",
+      "22/22 [==============================] - 0s 91us/step - loss: 0.5996 - acc: 0.7727\n",
+      "Epoch 84/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.5900 - acc: 0.7727\n",
+      "Epoch 85/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.5805 - acc: 0.7727\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch 86/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.5710 - acc: 0.7727\n",
+      "Epoch 87/100\n",
+      "22/22 [==============================] - 0s 227us/step - loss: 0.5618 - acc: 0.7727\n",
+      "Epoch 88/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.5527 - acc: 0.7727\n",
+      "Epoch 89/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.5435 - acc: 0.7727\n",
+      "Epoch 90/100\n",
+      "22/22 [==============================] - 0s 589us/step - loss: 0.5342 - acc: 0.7727\n",
+      "Epoch 91/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.5254 - acc: 0.8182\n",
+      "Epoch 92/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.5163 - acc: 0.8182\n",
+      "Epoch 93/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.5074 - acc: 0.8182\n",
+      "Epoch 94/100\n",
+      "22/22 [==============================] - 0s 91us/step - loss: 0.4989 - acc: 0.8182\n",
+      "Epoch 95/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.4901 - acc: 0.8636\n",
+      "Epoch 96/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.4811 - acc: 0.8636\n",
+      "Epoch 97/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.4725 - acc: 0.8636\n",
+      "Epoch 98/100\n",
+      "22/22 [==============================] - 0s 181us/step - loss: 0.4642 - acc: 0.8636\n",
+      "Epoch 99/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.4554 - acc: 0.9091\n",
+      "Epoch 100/100\n",
+      "22/22 [==============================] - 0s 136us/step - loss: 0.4469 - acc: 0.9091\n",
+      "22/22 [==============================] - 0s 20ms/step\n",
+      "Score is  [0.4385372996330261, 0.9090909361839294]\n"
+     ]
+    }
+   ],
+   "source": [
+    "def train_2nd_model():\n",
+    "    X,Y,m=load_train_data()\n",
+    "    data,labels=prepare_train_data(X,Y,m)\n",
+    "\n",
+    "    Smodel=getSimpleModel()\n",
+    "    Smodel.compile(optimizer='rmsprop',\n",
+    "                  loss='categorical_crossentropy',\n",
+    "                  metrics=['accuracy'])\n",
+    "    Smodel.fit(data,labels,epochs=100 )  # starts training\n",
+    "    score = Smodel.evaluate(data,labels)\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 60,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    " def predict(image_path_original,image_path_check,FRmodel,Smodel):\n",
+    "    encoding_original = img_to_encoding(image_path_original,FRmodel)\n",
+    "    encoding_check = img_to_encoding(image_path_check,FRmodel)\n",
+    "    dat=encoding_original-encoding_check\n",
+    "    \n",
+    "    prediction = Smodel.predict_on_batch(dat)\n",
+    "    return prediction"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 94,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def predict_2_models(image_path_original,image_path_check):\n",
+    "    show_images(image_path_original,image_path_check)\n",
+    "    print(\"Scoring...............................\")\n",
+    "    prediction = predict(image_path_original, image_path_check, FRmodel,Smodel)\n",
+    "    score = np.argmax(prediction)\n",
+    "    print(\"Score of similarity is \", score)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "train_2nd_model()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 95,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 2 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Scoring.......\n",
+      "Score of similarity is  2\n"
+     ]
+    }
+   ],
+   "source": [
+    "predict_2_models(\"images/image2.png\", \"images/image1_modified.png\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python (tensorflow)",
+   "language": "python",
+   "name": "myenv"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.8"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
