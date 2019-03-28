@@ -1,0 +1,4 @@
+Branch 1 : Work to make 350,350,3 to 96,96,3 using few layers before so that we can directly use FaceNet.
+Branch 2 : For each of the 12 images, generate similar images and manually score them and create a database.
+- Check if it is working better with 2 models approach after Branch 1 and Branch 2.
+Branch 3 : Just make fully connected model with 350,350,3 features
